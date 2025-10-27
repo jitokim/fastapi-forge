@@ -1,39 +1,66 @@
-"""Basic FastAPI Example with FastAPI Forge Logging
+"""Example 01: Basic FastAPI with Generic JSON Logging
 
-Minimal example showing how to use FastAPI Forge logging.
+Demonstrates FastAPI Forge logging with the generic JSONFormatter.
+This formatter works with any log aggregation platform (ELK, Splunk, Grafana Loki, etc.)
 
-## Installation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Installation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-```bash
 pip install fastapi uvicorn fastapi-forge
-```
 
-## Run
-
-```bash
-# Development (auto-reload)
-uvicorn main:app --reload
-
-# Production (with Gunicorn)
+# For production with Gunicorn
 pip install gunicorn
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Run
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Development (auto-reload)
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Production (Gunicorn + Uvicorn workers)
 gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-```
 
-## Test
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Test Endpoints
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-```bash
-# Health check (filtered out by HealthCheckFilter)
+# Health check (filtered - no logs generated)
 curl http://localhost:8000/api/_/health
 
-# Root endpoint
+# Root endpoint (generates INFO log)
 curl http://localhost:8000/
 
-# Log levels
+# Different log levels
 curl http://localhost:8000/debug
 
-# Error with exception
+# Custom fields in logs
+curl http://localhost:8000/custom-fields
+
+# Error with exception traceback
 curl http://localhost:8000/error
-```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Expected Log Output (JSON)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{
+  "timestamp": "2025-10-27T10:00:00.123Z",
+  "level": "INFO",
+  "logger": "__main__",
+  "message": "Root endpoint called"
+}
+
+{
+  "timestamp": "2025-10-27T10:00:05.456Z",
+  "level": "INFO",
+  "logger": "__main__",
+  "message": "Request with custom fields",
+  "user_id": "12345",
+  "action": "custom_request",
+  "metadata": {"key": "value"}
+}
 """
 
 import logging
@@ -42,8 +69,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi_forge.logging import configure_logging
 
-# Configure logging
-configure_logging()
+# Configure logging with generic JSON formatter
+# Works with any log aggregation platform (ELK, Splunk, Grafana Loki, etc.)
+configure_logging(formatter="json")
 
 logger = logging.getLogger(__name__)
 

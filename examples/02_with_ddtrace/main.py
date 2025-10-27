@@ -1,73 +1,95 @@
-"""FastAPI Example with Datadog ddtrace Integration
+"""Example 02: FastAPI with Datadog APM Integration
 
-이 예제는 gunicorn_logging_config를 ddtrace와 함께 사용하는 방법을 보여줍니다.
+Demonstrates FastAPI Forge logging with DatadogJSONFormatter for APM trace correlation.
+Logs automatically include dd.trace_id and dd.span_id for linking logs to traces in Datadog.
 
-## 실행 방법
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Installation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 1. 의존성 설치
-```bash
 pip install fastapi uvicorn gunicorn ddtrace python-dotenv
-```
 
-### 2. 환경 변수 설정 (.env 파일)
-```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Environment Variables (.env file)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Datadog APM
 DD_SERVICE=example-api
 DD_ENV=dev
 DD_TRACE_ENABLED=true
-DD_TRACE_LOGS_INJECTION=true
+DD_TRACE_LOGS_INJECTION=true    # Critical: Inject trace IDs into logs
 DD_TRACE_ASYNCIO_ENABLED=true
 DD_PROFILING_ENABLED=true
-LOG_LEVEL=INFO
-```
 
-### 3. Gunicorn으로 실행
-```bash
-# ddtrace-run 사용 (권장)
-ddtrace-run gunicorn example.main:app \
+# Logging
+LOG_LEVEL=INFO
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Run
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Development with ddtrace (recommended)
+cd examples/02_with_ddtrace
+ddtrace-run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Production with Gunicorn + ddtrace
+ddtrace-run gunicorn main:app \
   -w 2 \
   -k uvicorn.workers.UvicornWorker \
   --bind 0.0.0.0:8000
 
-# 또는 로컬 테스트 (ddtrace 없이)
-uvicorn example.main:app --reload
-```
+# Without ddtrace (for local testing - no trace correlation)
+uvicorn main:app --reload
 
-### 4. 테스트
-```bash
-# Health check
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Test Endpoints
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Health check (filtered - no logs)
 curl http://localhost:8000/api/_/health
 
-# 일반 요청 (trace context 생성)
+# Root endpoint (generates trace)
 curl http://localhost:8000/
 
-# User 생성 (extra 필드 포함)
-curl -X POST http://localhost:8000/users -H "Content-Type: application/json" -d '{"name": "Alice"}'
+# Create user (with custom fields)
+curl -X POST http://localhost:8000/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice"}'
 
-# 에러 테스트
+# Get user
+curl http://localhost:8000/users/1
+
+# Error with exception
 curl http://localhost:8000/error
-```
 
-## 로그 출력 예시
+# Different log levels
+curl http://localhost:8000/debug
 
-ddtrace-run을 사용하면 다음과 같은 로그가 출력됩니다:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Expected Log Output (with ddtrace-run)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-```json
 {
-  "timestamp": "2025-10-27T10:00:00Z",
+  "timestamp": "2025-10-27T10:00:00.123Z",
   "level": "INFO",
-  "status": "info",
-  "logger": "example.main",
+  "status": "info",                    # Datadog standard field
+  "logger": "__main__",
   "message": "User created successfully",
+  "user_id": 1,
   "user_name": "Alice",
-  "dd_trace_id": "1234567890",
-  "dd_span_id": "9876543210",
-  "dd_service": "example-api",
-  "dd_env": "dev"
+  "action": "create_user",
+  "dd.trace_id": "1234567890123456",   # Datadog trace ID (auto-injected)
+  "dd.span_id": "9876543210",          # Datadog span ID (auto-injected)
+  "dd_service": "example-api",         # From DD_SERVICE
+  "dd_env": "dev"                      # From DD_ENV
 }
-```
+
+Note: dd.trace_id and dd.span_id are automatically injected by ddtrace when
+      DD_TRACE_LOGS_INJECTION=true. Click trace IDs in Datadog to see logs!
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
@@ -82,8 +104,8 @@ load_dotenv()
 # This ensures DD_TRACE_LOGS_INJECTION works correctly
 from fastapi_forge.logging import configure_logging
 
-# Configure logging after ddtrace patching
-configure_logging()
+# Configure logging with Datadog-optimized formatter
+configure_logging(formatter="datadog")
 
 logger = logging.getLogger(__name__)
 

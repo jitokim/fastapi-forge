@@ -1,13 +1,59 @@
-"""Example FastAPI application with event loop blocking detection.
+"""Example 03: FastAPI with Event Loop Blocking Detection
 
-This example demonstrates how to integrate the EventLoopMonitor to detect
-blocking operations in your FastAPI application.
+Demonstrates FastAPI Forge's EventLoopMonitor for detecting blocking operations.
+The monitor automatically logs warnings when the event loop is blocked beyond a threshold.
 
-Run with:
-    uvicorn main:app --reload
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Installation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Or with Gunicorn:
-    gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+pip install fastapi uvicorn fastapi-forge
+
+# For production
+pip install gunicorn
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Run
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Development
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Production (multiple workers, each with its own monitor)
+gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Test Endpoints
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Healthy endpoint (no blocking)
+curl http://localhost:8000/healthy
+
+# Blocking endpoint (200ms block - will trigger WARNING)
+curl http://localhost:8000/blocking
+
+# Semi-blocking endpoint (60ms block - will trigger WARNING with 50ms threshold)
+curl http://localhost:8000/semi-blocking
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Expected Behavior
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When you hit /blocking or /semi-blocking, you'll see WARNING logs like:
+
+{
+  "timestamp": "2025-10-27T10:00:00.123Z",
+  "level": "WARNING",
+  "logger": "fastapi_forge.utils.blocking_monitor",
+  "message": "Event loop blocked for 0.2001s",
+  "delay_seconds": 0.2001,
+  "threshold_seconds": 0.05,
+  "check_interval_seconds": 0.1,
+  "stack_trace": "..."  # Shows where the blocking occurred
+}
+
+This helps identify blocking I/O operations (like time.sleep, requests.get, etc.)
+that should be replaced with async equivalents (asyncio.sleep, httpx.get, etc.)
 """
 
 import asyncio
@@ -22,8 +68,8 @@ from fastapi_forge.utils import start_event_loop_monitor, stop_event_loop_monito
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
-    # Configure logging
-    configure_logging()
+    # Configure logging with generic JSON formatter
+    configure_logging(formatter="json")
 
     # Start event loop monitor on application startup
     monitor = await start_event_loop_monitor(

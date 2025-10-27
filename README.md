@@ -9,11 +9,11 @@ FastAPI Forge provides battle-tested patterns and utilities for building product
 
 ## ✨ Features
 
-- 🪵 **Production Logging**: Datadog-optimized JSON logging with progressive truncation
+- 🪵 **Production Logging**: Generic JSON logging + Datadog-optimized formatter with progressive truncation
 - 🔍 **Event Loop Monitoring**: Detect and diagnose blocking operations in async applications
 - 🚀 **FastAPI Templates**: Production-ready app templates and best practices
 - 🤖 **Langchain Integration**: Utilities for LLM applications (coming soon)
-- 📊 **Observability**: Built-in support for Datadog APM and logging
+- 📊 **Observability**: Platform-agnostic logging (ELK, Splunk, Grafana) with optional Datadog APM
 - ⚙️ **Gunicorn/Uvicorn**: Optimized configurations for production deployment
 - 🎯 **Zero Dependencies**: Core logging features require only Python stdlib
 
@@ -44,8 +44,8 @@ pip install fastapi-forge[all]
 from fastapi import FastAPI
 from fastapi_forge.logging import configure_logging
 
-# Configure production logging
-configure_logging()
+# Configure generic JSON logging (works with any platform)
+configure_logging(formatter="json")
 
 app = FastAPI()
 
@@ -66,60 +66,84 @@ gunicorn main:app \
 
 ### Logging
 
-FastAPI Forge provides production-ready logging with:
+FastAPI Forge provides **two production-ready JSON formatters**:
+
+1. **`JSONFormatter`** (default): Generic formatter compatible with any log aggregation platform
+2. **`DatadogJSONFormatter`**: Datadog-optimized with APM trace correlation
 
 #### Key Features
 
-- **JSON Format**: Structured logging compatible with Datadog, ELK, Splunk
-- **Progressive Truncation**: 3-stage intelligent size management (Docker 16KB limit)
-- **Handler Isolation**: Separate handlers for Gunicorn ↔ Application logs
-- **Smart Filtering**:
-  - Health check endpoints (reduces noise)
-  - Langfuse library logs
-  - Langchain library logs
-- **Critical Field Preservation**: `trace_id`, `dd.trace_id`, `thread_id`, `component`
-- **Datadog APM Integration**: Automatic trace ID injection
+- ✅ **Platform Agnostic**: Works with ELK Stack, Splunk, Grafana Loki, CloudWatch, Datadog, etc.
+- ✅ **Progressive Truncation**: 3-stage intelligent size management (Docker 16KB limit)
+- ✅ **Handler Isolation**: Separate handlers for Gunicorn ↔ Application logs
+- ✅ **Smart Filtering**: Health checks (`/api/_/health`), Langfuse, Langchain, httpx
+- ✅ **Exception Formatting**: Structured exception info with traceback truncation
+- ✅ **stdout/stderr Separation**: INFO → stdout, WARNING+ → stderr
 
-#### Configuration
+#### Quick Start - Generic JSON
+
+Works with any log aggregation platform (default):
 
 ```python
+from fastapi import FastAPI
 from fastapi_forge.logging import configure_logging
+import logging
 
-# Basic configuration
-configure_logging()
+# Configure generic JSON logging
+configure_logging(formatter="json")  # or just configure_logging()
 
-# With environment variables
-# LOG_LEVEL=DEBUG python main.py
+logger = logging.getLogger(__name__)
+app = FastAPI()
+
+@app.get("/")
+def root():
+    logger.info("Request received", extra={"user_id": "123"})
+    return {"status": "ok"}
+```
+
+**Output**:
+```json
+{
+  "timestamp": "2025-10-27T10:00:00.123Z",
+  "level": "INFO",
+  "logger": "__main__",
+  "message": "Request received",
+  "user_id": "123"
+}
 ```
 
 #### Datadog APM Integration
+
+Use `DatadogJSONFormatter` for automatic log-trace correlation:
 
 ```python
 # main.py
 from dotenv import load_dotenv
 load_dotenv()
 
-# Import logging AFTER ddtrace can patch
 from fastapi_forge.logging import configure_logging
 
-# This must be called AFTER ddtrace patches logging
-configure_logging()
+# Use Datadog-optimized formatter
+configure_logging(formatter="datadog")
 
 from fastapi import FastAPI
 app = FastAPI()
 ```
 
-Environment variables:
+**Environment Variables**:
 ```bash
+# Datadog APM
 DD_SERVICE=my-api
 DD_ENV=production
 DD_TRACE_ENABLED=true
-DD_TRACE_LOGS_INJECTION=true  # Inject trace IDs into logs
+DD_TRACE_LOGS_INJECTION=true  # Critical for trace correlation
 DD_PROFILING_ENABLED=true
+
+# Logging
 LOG_LEVEL=INFO
 ```
 
-Run with ddtrace:
+**Run with ddtrace**:
 ```bash
 ddtrace-run gunicorn main:app \
   -w 4 \
@@ -127,43 +151,44 @@ ddtrace-run gunicorn main:app \
   --bind 0.0.0.0:8000
 ```
 
+**Output** (with Datadog):
+```json
+{
+  "timestamp": "2025-10-27T10:00:00.123Z",
+  "level": "INFO",
+  "status": "info",
+  "logger": "__main__",
+  "message": "Request received",
+  "user_id": "123",
+  "dd.trace_id": "1234567890123456",
+  "dd.span_id": "9876543210",
+  "dd_service": "my-api",
+  "dd_env": "production"
+}
+```
+
 #### Advanced Usage
 
 ```python
 from fastapi_forge.logging import (
     JSONFormatter,
+    DatadogJSONFormatter,
     HealthCheckFilter,
-    LangfuseFilter,
     get_logging_config,
 )
 import logging.config
 
-# Get the configuration dict
-config = get_logging_config()
-
-# Customize as needed
+# Option 1: Get config and customize
+config = get_logging_config(formatter="json")
 config['root']['level'] = 'DEBUG'
-
-# Apply configuration
 logging.config.dictConfig(config)
-```
 
-#### Log Output Example
-
-```json
-{
-  "timestamp": "2025-10-27T10:00:00Z",
-  "level": "INFO",
-  "status": "info",
-  "logger": "my_app.api",
-  "message": "User created successfully",
-  "user_id": "12345",
-  "action": "create_user",
-  "dd_trace_id": "1234567890",
-  "dd_span_id": "9876543210",
-  "dd_service": "my-api",
-  "dd_env": "production"
-}
+# Option 2: Use formatter directly
+import logging
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())  # or DatadogJSONFormatter()
+logger = logging.getLogger()
+logger.addHandler(handler)
 ```
 
 ### Filters

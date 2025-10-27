@@ -1,37 +1,91 @@
 """JSON formatters for FastAPI Forge.
 
-Datadog-optimized JSON formatters with progressive truncation and size limits.
+Provides two JSON formatters for structured logging:
+
+1. JSONFormatter: Generic JSON formatter compatible with any log aggregation platform
+   (ELK Stack, Splunk, Grafana Loki, CloudWatch, etc.)
+
+2. DatadogJSONFormatter: Datadog-optimized formatter with trace correlation fields
+   (dd.trace_id, dd.span_id, dd_service, dd_env, status)
+
+Both formatters include:
+- Progressive truncation strategy (3 stages)
+- Individual field size limits
+- Exception formatting with traceback truncation
+- Docker 16KB log size consideration
+
+Usage:
+    # Direct usage
+    from fastapi_forge.logging import JSONFormatter, DatadogJSONFormatter
+
+    formatter = JSONFormatter()  # or DatadogJSONFormatter()
+    handler.setFormatter(formatter)
+
+    # Or use configure_logging() for automatic setup
+    from fastapi_forge.logging import configure_logging
+
+    configure_logging(formatter="json")     # Generic
+    configure_logging(formatter="datadog")  # Datadog-optimized
 """
 
 import json
 import logging
 import traceback
-from datetime import datetime
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable
 
 
 class JSONFormatter(logging.Formatter):
-    """Datadog/ELK/Splunk compatible JSON formatter.
+    """Generic JSON formatter for structured logging.
+
+    Use this formatter for platform-agnostic JSON logging that works with
+    any log aggregation system (ELK Stack, Splunk, Grafana Loki, CloudWatch, etc.)
+
+    Output Format:
+        {
+            "timestamp": "2025-10-27T10:00:00.123Z",  # ISO8601 UTC with Z suffix
+            "level": "INFO",                           # Log level
+            "logger": "myapp.module",                  # Logger name
+            "message": "User action completed",        # Log message
+            "user_id": "12345",                        # Custom fields from 'extra'
+            "exception": {...}                         # Exception info (if present)
+        }
 
     Features:
-    - 3-stage progressive truncation strategy
-    - Individual field size limits (MAX_FIELD_SIZE: 1000)
-    - Preserve critical fields (trace_id, dd.trace_id, thread_id, component)
-    - Enhanced exception formatting with traceback truncation
-    - Docker 16KB log size consideration
+        - 3-stage progressive truncation (field → non-core → message)
+        - Field size limits (1KB per field, 15KB total)
+        - Critical field preservation (trace_id, thread_id, component)
+        - Exception formatting with traceback truncation (2KB limit)
+        - JSON serialization error handling
 
-    Based on lbox-ai-agent's DatadogJSONFormatter with improvements.
+    Example:
+        import logging
+        from fastapi_forge.logging import JSONFormatter
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(JSONFormatter())
+        logger = logging.getLogger(__name__)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+        logger.info("User logged in", extra={"user_id": "123", "ip": "1.2.3.4"})
+        # Output: {"timestamp":"...","level":"INFO","logger":"...","message":"User logged in","user_id":"123","ip":"1.2.3.4"}
     """
 
     # Core fields - order guaranteed for readability
     CORE_FIELDS = ["timestamp", "level", "logger", "message"]
+    CRITICAL_FIELDS = {
+        "trace_id",
+        "thread_id",
+        "component",
+    }
 
     # Size limits - considering Docker 16KB limit
     MAX_MESSAGE_SIZE = 15000  # Safety margin included
     MAX_FIELD_SIZE = 1000  # Individual field size limit
 
     def format(self, record: logging.LogRecord) -> str:
-        """Convert log record to Datadog-optimized JSON."""
+        """Convert log record to structured JSON."""
         try:
             log_entry = self._build_core_structure(record)
 
@@ -56,9 +110,8 @@ class JSONFormatter(logging.Formatter):
     def _build_core_structure(self, record: logging.LogRecord) -> Dict[str, Any]:
         """Build core log structure."""
         return {
-            "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
+            "timestamp": self._format_timestamp(record.created),
             "level": record.levelname,
-            "status": record.levelname.lower(),  # Datadog standard field for log level
             "logger": record.name,
             "message": record.getMessage(),
         }
@@ -174,10 +227,11 @@ class JSONFormatter(logging.Formatter):
             return json_str
 
         # Stage 2: Remove non-core fields
-        non_core_keys = [k for k in log_entry.keys() if k not in self.CORE_FIELDS]
+        preserve_keys = set(self.CORE_FIELDS).union(self.CRITICAL_FIELDS)
+        non_core_keys = [k for k in list(log_entry.keys()) if k not in preserve_keys]
         for key in non_core_keys:
             # Preserve critical fields
-            if key not in ["trace_id", "dd.trace_id", "thread_id", "component"]:
+            if key not in preserve_keys:
                 del log_entry[key]
                 json_str = json.dumps(
                     log_entry, ensure_ascii=False, separators=(",", ":")
@@ -191,13 +245,17 @@ class JSONFormatter(logging.Formatter):
 
         return json.dumps(log_entry, ensure_ascii=False, separators=(",", ":"))
 
+    def _format_timestamp(self, created: float) -> str:
+        """Return an ISO8601 UTC timestamp with trailing Z."""
+        timestamp = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+        return timestamp.replace("+00:00", "Z")
+
     def _fallback_format(self, record: logging.LogRecord, error: Exception) -> str:
         """Fallback format for when formatting fails."""
         return json.dumps(
             {
-                "timestamp": datetime.fromtimestamp(record.created).isoformat() + "Z",
+                "timestamp": self._format_timestamp(record.created),
                 "level": record.levelname,
-                "status": record.levelname.lower(),  # Datadog standard field for log level
                 "logger": record.name,
                 "message": record.getMessage(),
                 "formatter_error": str(error),
@@ -207,4 +265,88 @@ class JSONFormatter(logging.Formatter):
         )
 
 
-__all__ = ["JSONFormatter"]
+class DatadogJSONFormatter(JSONFormatter):
+    """Datadog-optimized JSON formatter with APM trace correlation.
+
+    Extends JSONFormatter with Datadog-specific fields for automatic log-trace
+    correlation in Datadog APM. Use this when shipping logs to Datadog.
+
+    Output Format (extends JSONFormatter):
+        {
+            "timestamp": "2025-10-27T10:00:00.123Z",
+            "level": "INFO",
+            "status": "info",              # Datadog log level (lowercase)
+            "logger": "myapp.module",
+            "message": "User action completed",
+            "dd.trace_id": "1234567890",   # Datadog trace ID (auto-injected)
+            "dd.span_id": "9876543210",    # Datadog span ID (auto-injected)
+            "dd_service": "my-service",    # Service name
+            "dd_env": "production",        # Environment
+            "user_id": "12345"             # Custom fields
+        }
+
+    Additional Features (over JSONFormatter):
+        - 'status' field: Datadog's standard log level field (lowercase)
+        - Preserves dd.trace_id, dd.span_id for APM correlation
+        - Preserves dd_service, dd_env tags
+
+    Usage with Datadog APM:
+        # Set environment variables
+        DD_SERVICE=my-service
+        DD_ENV=production
+        DD_TRACE_ENABLED=true
+        DD_TRACE_LOGS_INJECTION=true
+
+        # Configure logging
+        from fastapi_forge.logging import configure_logging
+        configure_logging(formatter="datadog")
+
+        # Logs will automatically include trace IDs when using ddtrace-run
+
+    Example:
+        import logging
+        from fastapi_forge.logging import DatadogJSONFormatter
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(DatadogJSONFormatter())
+        logger = logging.getLogger(__name__)
+        logger.addHandler(handler)
+
+        logger.info("User action", extra={"user_id": "123"})
+        # Output includes: status, dd.trace_id, dd.span_id (when using ddtrace)
+    """
+
+    # Extend critical fields with Datadog-specific ones
+    CRITICAL_FIELDS = {
+        "trace_id",
+        "dd.trace_id",
+        "dd.span_id",
+        "dd_service",
+        "dd_env",
+        "thread_id",
+        "component",
+    }
+
+    def _build_core_structure(self, record: logging.LogRecord) -> Dict[str, Any]:
+        """Build core log structure with Datadog status field."""
+        structure = super()._build_core_structure(record)
+        structure["status"] = record.levelname.lower()
+        return structure
+
+    def _fallback_format(self, record: logging.LogRecord, error: Exception) -> str:
+        """Fallback format with Datadog status field."""
+        return json.dumps(
+            {
+                "timestamp": self._format_timestamp(record.created),
+                "level": record.levelname,
+                "status": record.levelname.lower(),
+                "logger": record.name,
+                "message": record.getMessage(),
+                "formatter_error": str(error),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
+__all__ = ["JSONFormatter", "DatadogJSONFormatter"]
