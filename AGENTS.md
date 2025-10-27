@@ -120,27 +120,45 @@ class EventLoopMonitor:
 
 ### FastAPI Best Practices
 
-**⚠️ IMPORTANT**: For detailed FastAPI development guidelines, see:
-- **[docs/FASTAPI_GUIDELINES.md](./docs/FASTAPI_GUIDELINES.md)**
+**⚠️ IMPORTANT**: For detailed development guidelines, see:
+- **[docs/FASTAPI_GUIDELINES.md](./docs/FASTAPI_GUIDELINES.md)** - Comprehensive FastAPI development patterns
+- **[docs/GUNICORN_GUIDELINES.md](./docs/GUNICORN_GUIDELINES.md)** - Production deployment with Gunicorn + Uvicorn
+- **[docs/TESTING_GUIDELINES.md](./docs/TESTING_GUIDELINES.md)** - Testing strategies and patterns
 
-This document covers:
-- Server execution (Gunicorn + Uvicorn workers)
-- Worker and performance tuning
-- Concurrency and blocking handling
-- Streaming timeouts and heartbeat
-- Lifecycle and dependency injection
-- External HTTP guardrails
-- Observability and logging
-- Failure suppression and monitoring
-- Testing principles
+**FASTAPI_GUIDELINES.md** covers:
+- Server deployment (Gunicorn + Uvicorn configuration)
+- Concurrency & blocking handling (async/await patterns)
+- Wrapping sync SDKs as async (ThreadPoolExecutor patterns)
+- Streaming & heartbeat (preventing timeout issues)
+- Lifecycle & dependency injection (lifespan, app.state, Depends)
+- External HTTP client patterns (7 comprehensive sections)
+- Observability & logging (structured logs, Datadog APM)
+- Failure suppression & monitoring (health checks, cascading failure prevention)
+
+**GUNICORN_GUIDELINES.md** covers:
+- Server execution configuration (workers, timeouts, keep-alive)
+- Worker configuration and tuning guidelines
+- Timeout settings (worker, graceful, keep-alive)
+- Worker recycling (max-requests, jitter)
+- Datadog integration (ddtrace-run)
+- Health checks and troubleshooting
+
+**TESTING_GUIDELINES.md** covers:
+- Core testing principles (coverage, success/failure cases)
+- FastAPI testing patterns (TestClient, AsyncClient)
+- pytest-mock patterns (stubs, spies)
+- Dependency injection testing (dependency_overrides)
+- Async testing (pytest-asyncio)
+- Database testing (test database, transactions)
+- External service mocking (httpx, API failures)
 
 **Key Principles (Summary)**:
 1. **Use async clients**: Always use `httpx.AsyncClient`, `asyncpg`, `motor` for I/O
-2. **Offload blocking**: Wrap sync functions with `asyncio.to_thread()`
-3. **Monitor event loop**: Use `EventLoopMonitor` to detect blocking
+2. **Offload blocking**: Wrap sync functions with `asyncio.to_thread()` or dedicated ThreadPoolExecutor
+3. **Monitor event loop**: Use `EventLoopMonitor` to detect blocking operations
 4. **Structured logging**: Use JSON formatter with Datadog integration
 5. **Lifecycle management**: Initialize resources in `lifespan`, clean up on shutdown
-6. **Test isolation**: Use `app.dependency_overrides` for testing
+6. **Test isolation**: Use `app.dependency_overrides` for testing, test success & failure paths
 
 ### Code Style
 
@@ -397,7 +415,9 @@ mypy src/
 ## Related Documentation
 
 - **[README.md](./README.md)**: User-facing documentation
-- **[docs/FASTAPI_GUIDELINES.md](./docs/FASTAPI_GUIDELINES.md)**: Detailed FastAPI best practices
+- **[docs/FASTAPI_GUIDELINES.md](./docs/FASTAPI_GUIDELINES.md)**: Comprehensive FastAPI development best practices
+- **[docs/GUNICORN_GUIDELINES.md](./docs/GUNICORN_GUIDELINES.md)**: Production deployment with Gunicorn + Uvicorn
+- **[docs/TESTING_GUIDELINES.md](./docs/TESTING_GUIDELINES.md)**: Testing strategies and patterns
 - **[LICENSE](./LICENSE)**: MIT License
 - **[examples/](./examples/)**: Working examples
 
