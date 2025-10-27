@@ -10,6 +10,7 @@ FastAPI Forge provides battle-tested patterns and utilities for building product
 ## ✨ Features
 
 - 🪵 **Production Logging**: Datadog-optimized JSON logging with progressive truncation
+- 🔍 **Event Loop Monitoring**: Detect and diagnose blocking operations in async applications
 - 🚀 **FastAPI Templates**: Production-ready app templates and best practices
 - 🤖 **Langchain Integration**: Utilities for LLM applications (coming soon)
 - 📊 **Observability**: Built-in support for Datadog APM and logging
@@ -175,22 +176,105 @@ Built-in filters to reduce log noise:
 - **InfoFilter**: Stdout for INFO/DEBUG only
 - **WarningAndAboveFilter**: Stderr for WARNING/ERROR/CRITICAL
 
+### Event Loop Monitoring
+
+FastAPI Forge includes an EventLoopMonitor that detects blocking operations in async applications.
+
+#### Why Monitor the Event Loop?
+
+In async Python applications, blocking operations (like `time.sleep()`, synchronous I/O, or CPU-intensive tasks) can freeze the entire event loop, causing:
+
+- Poor performance and unresponsive APIs
+- Request timeouts and degraded user experience
+- Difficulty diagnosing performance issues
+
+The EventLoopMonitor detects these problems by measuring actual vs expected delay of scheduled `asyncio.sleep()` calls, and captures stack traces to help identify the blocking code.
+
+#### Basic Usage
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi_forge.utils import start_event_loop_monitor, stop_event_loop_monitor
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start monitoring on startup
+    monitor = await start_event_loop_monitor(
+        check_interval=0.1,      # Check every 100ms
+        threshold=0.05,          # Warn if delayed more than 50ms
+        capture_stack_trace=True # Capture stack traces on blocking
+    )
+    yield
+    # Stop monitoring on shutdown
+    await stop_event_loop_monitor()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+#### Configuration
+
+Environment variables:
+```bash
+EVENT_LOOP_CHECK_INTERVAL=0.1  # Check interval in seconds (default: 0.1)
+EVENT_LOOP_THRESHOLD=0.05      # Blocking threshold in seconds (default: 0.05)
+EVENT_LOOP_CAPTURE_STACKS=true # Enable stack trace capture (default: true)
+```
+
+#### Example Output
+
+When blocking is detected:
+
+```json
+{
+  "timestamp": "2025-10-27T10:00:00Z",
+  "level": "WARNING",
+  "logger": "fastapi_forge.utils.blocking_detector",
+  "message": "[EVENT_LOOP_BLOCKED] Event loop blocking detected\n\nRunning tasks:\nTask: blocking_endpoint\n  File \"main.py\", line 57, in blocking_endpoint",
+  "expected_delay_ms": 100.0,
+  "actual_delay_ms": 250.0,
+  "excess_delay_ms": 150.0,
+  "blocking_ratio": 150.0
+}
+```
+
+#### Performance Impact
+
+The monitor has minimal overhead:
+- Check interval: 100ms (default)
+- CPU usage: <0.1% per check
+- Memory: ~1-2KB per captured stack trace
+
+#### When to Use
+
+✅ **Use in:**
+- Production environments with async workloads
+- Debugging performance issues
+- Detecting blocking I/O operations
+- Monitoring long-running synchronous code
+
+❌ **Skip for:**
+- CPU-bound applications (expected blocking)
+- Single-threaded synchronous apps
+
 ## 📁 Project Structure
 
 ```
 fastapi-forge/
 ├── src/fastapi_forge/
-│   ├── logging/           # Production logging
-│   │   ├── config.py      # Configuration
-│   │   ├── formatters.py  # JSONFormatter
-│   │   └── filters.py     # Log filters
-│   ├── templates/         # App templates (coming soon)
-│   ├── middleware/        # Production middleware (coming soon)
-│   ├── langchain/         # Langchain utilities (coming soon)
-│   └── utils/             # Utilities
+│   ├── logging/              # Production logging
+│   │   ├── config.py         # Configuration
+│   │   ├── formatters.py     # JSONFormatter
+│   │   └── filters.py        # Log filters
+│   ├── utils/                # Utilities
+│   │   └── blocking_detector.py  # Event loop monitoring
+│   ├── templates/            # App templates (coming soon)
+│   ├── middleware/           # Production middleware (coming soon)
+│   └── langchain/            # Langchain utilities (coming soon)
 ├── examples/
 │   ├── 01_basic_fastapi/
-│   └── 02_with_ddtrace/
+│   ├── 02_with_ddtrace/
+│   └── 03_with_blocking_monitor/
 └── docs/
 ```
 
@@ -200,6 +284,7 @@ Check the [`examples/`](./examples/) directory for complete working examples:
 
 - **[01_basic_fastapi](./examples/01_basic_fastapi/)**: Minimal FastAPI app with logging
 - **[02_with_ddtrace](./examples/02_with_ddtrace/)**: Production setup with Datadog APM
+- **[03_with_blocking_monitor](./examples/03_with_blocking_monitor/)**: Event loop monitoring and blocking detection
 
 ## 🤝 Contributing
 
@@ -232,6 +317,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Production logging with Datadog optimization
 - [x] JSON formatter with progressive truncation
 - [x] Smart log filters (health checks, libraries)
+- [x] Event loop monitoring and blocking detection
 - [ ] FastAPI app templates
 - [ ] Production middleware (correlation ID, error handling)
 - [ ] Langchain integration utilities
