@@ -35,8 +35,11 @@ class HealthCheckFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        if "/api/health/heartbeat" in msg or "/api/_/health" in msg:
+        # Cache getMessage() result to avoid redundant msg % args
+        if not hasattr(record, '_cached_message'):
+            record._cached_message = record.getMessage()
+
+        if "/api/health/heartbeat" in record._cached_message or "/api/_/health" in record._cached_message:
             return False
         return True
 
@@ -57,9 +60,12 @@ class LangfuseFilter(logging.Filter):
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
+        # Cache getMessage() result to avoid redundant msg % args
+        if not hasattr(record, '_cached_message'):
+            record._cached_message = record.getMessage()
+
         for pattern in self.__ignore_logs:
-            if pattern in message:
+            if pattern in record._cached_message:
                 return False
         return True
 
@@ -76,9 +82,12 @@ class LangchainFilter(logging.Filter):
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
+        # Cache getMessage() result to avoid redundant msg % args
+        if not hasattr(record, '_cached_message'):
+            record._cached_message = record.getMessage()
+
         for pattern in self.__ignore_logs:
-            if pattern in message:
+            if pattern in record._cached_message:
                 return False
         return True
 

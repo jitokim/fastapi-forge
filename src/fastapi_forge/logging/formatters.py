@@ -109,11 +109,20 @@ class JSONFormatter(logging.Formatter):
 
     def _build_core_structure(self, record: logging.LogRecord) -> Dict[str, Any]:
         """Build core log structure."""
+        # Use cached message if available (set by filters)
+        if not hasattr(record, '_cached_message'):
+            record._cached_message = record.getMessage()
+
+        # Limit message size upfront to prevent _progressive_truncation overhead
+        message = record._cached_message
+        if len(message) > 10000:  # 10KB limit for message field
+            message = message[:10000] + "...[truncated]"
+
         return {
             "timestamp": self._format_timestamp(record.created),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": message,
         }
 
     def _extract_extra_fields(self, record: logging.LogRecord) -> Dict[str, Any]:
@@ -211,11 +220,13 @@ class JSONFormatter(logging.Formatter):
         return self._progressive_truncation(log_entry)
 
     def _progressive_truncation(self, log_entry: Dict[str, Any]) -> str:
-        """Progressive truncation - remove/shrink fields by priority.
+        """Simplified truncation strategy - prevents OOM from repeated serialization.
+
+        Note: This method is rarely called now that message is limited to 10KB upfront.
 
         Stage 1: Shrink long field values
-        Stage 2: Remove non-core fields (preserve critical fields)
-        Stage 3: Shrink message
+        Stage 2: Batch remove non-core fields (no loop serialization)
+        Stage 3: Shrink message (last resort)
         """
         # Stage 1: Shrink long field values
         for key, value in list(log_entry.items()):
@@ -226,20 +237,17 @@ class JSONFormatter(logging.Formatter):
         if len(json_str.encode("utf-8")) <= self.MAX_MESSAGE_SIZE:
             return json_str
 
-        # Stage 2: Remove non-core fields
+        # Stage 2: Batch remove all non-core fields at once (no repeated serialization)
         preserve_keys = set(self.CORE_FIELDS).union(self.CRITICAL_FIELDS)
-        non_core_keys = [k for k in list(log_entry.keys()) if k not in preserve_keys]
-        for key in non_core_keys:
-            # Preserve critical fields
-            if key not in preserve_keys:
-                del log_entry[key]
-                json_str = json.dumps(
-                    log_entry, ensure_ascii=False, separators=(",", ":")
-                )
-                if len(json_str.encode("utf-8")) <= self.MAX_MESSAGE_SIZE:
-                    return json_str
+        keys_to_remove = [k for k in list(log_entry.keys()) if k not in preserve_keys]
+        for key in keys_to_remove:
+            del log_entry[key]
 
-        # Stage 3: Shrink message
+        json_str = json.dumps(log_entry, ensure_ascii=False, separators=(",", ":"))
+        if len(json_str.encode("utf-8")) <= self.MAX_MESSAGE_SIZE:
+            return json_str
+
+        # Stage 3: Shrink message (last resort)
         if len(log_entry.get("message", "")) > 200:
             log_entry["message"] = log_entry["message"][:200] + "...[truncated]"
 
@@ -329,6 +337,7 @@ class DatadogJSONFormatter(JSONFormatter):
 
     def _build_core_structure(self, record: logging.LogRecord) -> Dict[str, Any]:
         """Build core log structure with Datadog status field."""
+        # Parent class already handles caching and message size limiting
         structure = super()._build_core_structure(record)
         structure["status"] = record.levelname.lower()
         return structure
