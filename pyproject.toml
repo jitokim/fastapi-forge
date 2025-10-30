@@ -3,7 +3,7 @@ name = "fastapi-forge"
 version = "0.1.0"
 description = "Production-ready toolkit for FastAPI applications"
 authors = [
-    {name = "FastAPI Forge Contributors", email = "fastapi-forge@example.com"}
+    {name = "FastAPI Forge Contributors", email = "pigberger70@gmail.com"}
 ]
 license = {text = "MIT"}
 readme = "README.md"
