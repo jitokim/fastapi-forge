@@ -30,6 +30,7 @@ Usage:
 
 import json
 import logging
+import os
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable
@@ -123,6 +124,7 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": message,
+            "worker_pid": os.getpid(),  # Gunicorn worker process ID for debugging
         }
 
     def _extract_extra_fields(self, record: logging.LogRecord) -> Dict[str, Any]:
