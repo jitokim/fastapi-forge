@@ -11,6 +11,7 @@ FastAPI Forge provides battle-tested patterns and utilities for building product
 
 - 🪵 **Production Logging**: Generic JSON logging + Datadog-optimized formatter with progressive truncation
 - 🔍 **Event Loop Monitoring**: Detect and diagnose blocking operations in async applications
+- 🗑️ **GC Monitoring**: Track Python garbage collection behavior and tune for memory-constrained environments
 - 🚀 **FastAPI Templates**: Production-ready app templates and best practices
 - 🤖 **Langchain Integration**: Utilities for LLM applications (coming soon)
 - 📊 **Observability**: Platform-agnostic logging (ELK, Splunk, Grafana) with optional Datadog APM
@@ -282,6 +283,144 @@ The monitor has minimal overhead:
 - CPU-bound applications (expected blocking)
 - Single-threaded synchronous apps
 
+### GC Monitoring
+
+FastAPI Forge includes a GCMonitor that tracks Python's garbage collection behavior in production environments.
+
+#### Why Monitor Garbage Collection?
+
+In production environments, understanding GC behavior helps:
+
+- **Diagnose OOM issues**: Correlate memory exhaustion with GC patterns
+- **Detect memory leaks**: Track uncollectable objects (circular references)
+- **Optimize GC thresholds**: Tune for memory-constrained vs CPU-constrained environments
+- **Worker-level debugging**: Identify problematic workers in multi-worker setups
+
+#### Basic Usage
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi_forge.monitoring import GCMonitor
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start GC monitoring
+    gc_monitor = GCMonitor(
+        threshold=(500, 5, 5),  # More frequent GC for memory-constrained environments
+        log_interval=60,        # Log GC stats every 60 seconds
+    )
+    await gc_monitor.start()
+    app.state.gc_monitor = gc_monitor
+
+    yield
+
+    # Stop monitoring on shutdown
+    await gc_monitor.stop()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+#### Configuration
+
+**GC Threshold Tuning:**
+
+Python default: `(700, 10, 10)`
+- gen0: Collect after 700 objects allocated
+- gen1: Collect after gen0 runs 10 times
+- gen2: Collect after gen1 runs 10 times
+
+**Recommendations:**
+
+```python
+# Memory-constrained (2GB, 4 workers = 500MB/worker)
+GCMonitor(threshold=(500, 5, 5))  # 30-82% more frequent GC
+
+# Balanced (4GB, 4 workers = 1GB/worker)
+GCMonitor(threshold=(650, 8, 8))  # Moderate GC frequency
+
+# CPU-constrained or high-memory
+GCMonitor(threshold=(1000, 20, 20))  # Less frequent GC
+
+# Keep Python default
+GCMonitor(threshold=None)  # No threshold override
+```
+
+#### Example Output
+
+**On worker startup:**
+```json
+{
+  "timestamp": "2025-10-30T10:00:00Z",
+  "level": "INFO",
+  "logger": "fastapi_forge.monitoring.gc_monitor",
+  "message": "GC initial state",
+  "worker_pid": 12345,
+  "threshold": [700, 10, 10],
+  "gen0_collections": 42,
+  "gen0_collected": 1234,
+  "gen0_uncollectable": 0
+}
+```
+
+**Periodic stats (every 60s):**
+```json
+{
+  "timestamp": "2025-10-30T10:01:00Z",
+  "level": "INFO",
+  "logger": "fastapi_forge.monitoring.gc_monitor",
+  "message": "GC stats snapshot",
+  "worker_pid": 12345,
+  "threshold": [500, 5, 5],
+  "gen0_collections": 123,
+  "gen0_collected": 4567,
+  "gen0_uncollectable": 0,
+  "gen1_collections": 12,
+  "gen1_collected": 234,
+  "gen2_collections": 1,
+  "gen2_collected": 56
+}
+```
+
+#### Observability Platform Integration
+
+**Datadog:**
+```
+# Filter by worker
+@worker_pid:12345 "GC stats snapshot"
+
+# Memory leak detection
+@gen0_uncollectable:>0 OR @gen1_uncollectable:>0
+
+# Create metrics from logs
+gen0_collections, gen1_collections, gen2_collections
+
+# Alert on uncollectable objects
+@gen2_uncollectable:>0
+```
+
+**ELK/Splunk/Grafana:**
+- Index on `worker_pid` for per-worker analysis
+- Create dashboards tracking GC frequency over time
+- Alert on `uncollectable > 0` for potential memory leaks
+
+#### Interpreting Results
+
+**Uncollectable objects:**
+- `uncollectable > 0` indicates circular references Python couldn't break
+- Potential memory leak requiring code review
+- Check for `__del__` methods creating circular refs
+
+**Collection frequency:**
+- High gen0_collections: Normal for busy workers
+- Low gen2_collections: Objects not surviving long enough
+- No gen2_collections for hours: May indicate threshold too high
+
+**Worker comparison:**
+- Compare stats across workers with `@worker_pid`
+- Uneven GC patterns may indicate load imbalance
+- One worker with high uncollectable → investigate that worker's requests
+
 ## 📁 Project Structure
 
 ```
@@ -291,6 +430,8 @@ fastapi-forge/
 │   │   ├── config.py         # Configuration
 │   │   ├── formatters.py     # JSONFormatter
 │   │   └── filters.py        # Log filters
+│   ├── monitoring/           # Production monitoring
+│   │   └── gc_monitor.py     # GC monitoring
 │   ├── utils/                # Utilities
 │   │   └── blocking_detector.py  # Event loop monitoring
 │   ├── templates/            # App templates (coming soon)
@@ -344,6 +485,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Smart log filters (health checks, libraries)
 - [x] Event loop monitoring and blocking detection
 - [x] **Logging performance optimization (OOM prevention)**
+- [x] **GC monitoring and tuning**
 - [ ] FastAPI app templates
 - [ ] Production middleware (correlation ID, error handling)
 - [ ] Langchain integration utilities
