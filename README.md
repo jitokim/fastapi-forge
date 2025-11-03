@@ -11,7 +11,7 @@ FastAPI Forge provides battle-tested patterns and utilities for building product
 
 - 🪵 **Production Logging**: Generic JSON logging + Datadog-optimized formatter with progressive truncation
 - 🔍 **Event Loop Monitoring**: Detect and diagnose blocking operations in async applications
-- 🗑️ **GC Monitoring**: Track Python garbage collection behavior and tune for memory-constrained environments
+- 🗑️ **GC Monitoring**: Track Python GC behavior with dynamic threshold calculation based on system resources
 - 🚀 **FastAPI Templates**: Production-ready app templates and best practices
 - 🤖 **Langchain Integration**: Utilities for LLM applications (coming soon)
 - 📊 **Observability**: Platform-agnostic logging (ELK, Splunk, Grafana) with optional Datadog APM
@@ -285,7 +285,7 @@ The monitor has minimal overhead:
 
 ### GC Monitoring
 
-FastAPI Forge includes a GCMonitor that tracks Python's garbage collection behavior in production environments.
+FastAPI Forge includes a GCMonitor that tracks Python's garbage collection behavior and **automatically optimizes GC thresholds** based on system resources.
 
 #### Why Monitor Garbage Collection?
 
@@ -293,7 +293,7 @@ In production environments, understanding GC behavior helps:
 
 - **Diagnose OOM issues**: Correlate memory exhaustion with GC patterns
 - **Detect memory leaks**: Track uncollectable objects (circular references)
-- **Optimize GC thresholds**: Tune for memory-constrained vs CPU-constrained environments
+- **Optimize GC thresholds**: Auto-tune based on memory availability and worker count
 - **Worker-level debugging**: Identify problematic workers in multi-worker setups
 
 #### Basic Usage
@@ -305,11 +305,8 @@ from fastapi_forge.monitoring import GCMonitor
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start GC monitoring
-    gc_monitor = GCMonitor(
-        threshold=(500, 5, 5),  # More frequent GC for memory-constrained environments
-        log_interval=60,        # Log GC stats every 60 seconds
-    )
+    # Start GC monitoring with auto-calculated threshold
+    gc_monitor = GCMonitor(log_interval=60)  # Threshold automatically calculated!
     await gc_monitor.start()
     app.state.gc_monitor = gc_monitor
 
@@ -321,34 +318,73 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
-#### Configuration
+**Environment Variables:**
+```bash
+WORKERS=4  # Number of workers (used for threshold calculation)
+```
 
-**GC Threshold Tuning:**
+#### Dynamic Threshold Calculation
 
-Python default: `(700, 10, 10)`
-- gen0: Collect after 700 objects allocated
-- gen1: Collect after gen0 runs 10 times
-- gen2: Collect after gen1 runs 10 times
+GCMonitor **automatically calculates** optimal GC thresholds based on:
+- System memory (detected via `os.sysconf` or `/proc/meminfo`)
+- Number of workers (from `WORKERS` environment variable)
+- Memory per worker ratio
 
-**Recommendations:**
+**Algorithm:**
+```python
+memory_per_worker = total_memory / workers
+scale_factor = memory_per_worker / 0.5  # 0.5GB baseline
+gen0 = clamp(700 * scale_factor, 400, 1000)
+gen1 = max(5, gen0 // 70)
+gen2 = max(5, gen0 // 70)
+```
+
+**Examples:**
+```python
+# 2GB / 4 workers = 0.5GB per worker
+# → (700, 10, 10)  Python default
+
+# 4GB / 4 workers = 1GB per worker
+# → (1000, 14, 14)  Less frequent GC (more memory available)
+
+# 2GB / 8 workers = 0.25GB per worker
+# → (400, 5, 5)  More frequent GC (memory pressure)
+```
+
+#### Manual Override
+
+You can still override with custom thresholds if needed:
 
 ```python
-# Memory-constrained (2GB, 4 workers = 500MB/worker)
-GCMonitor(threshold=(500, 5, 5))  # 30-82% more frequent GC
+# Memory-constrained: More frequent GC
+gc_monitor = GCMonitor(threshold=(500, 5, 5), log_interval=60)
 
-# Balanced (4GB, 4 workers = 1GB/worker)
-GCMonitor(threshold=(650, 8, 8))  # Moderate GC frequency
+# CPU-constrained: Less frequent GC
+gc_monitor = GCMonitor(threshold=(1000, 20, 20), log_interval=60)
 
-# CPU-constrained or high-memory
-GCMonitor(threshold=(1000, 20, 20))  # Less frequent GC
-
-# Keep Python default
-GCMonitor(threshold=None)  # No threshold override
+# Auto-calculate (recommended)
+gc_monitor = GCMonitor(log_interval=60)  # threshold=None
 ```
 
 #### Example Output
 
-**On worker startup:**
+**Dynamic threshold calculation (on worker startup):**
+```json
+{
+  "timestamp": "2025-10-30T10:00:00Z",
+  "level": "INFO",
+  "logger": "fastapi_forge.monitoring.gc_monitor",
+  "message": "GC threshold calculated dynamically",
+  "worker_pid": 12345,
+  "total_memory_gb": 2.0,
+  "workers": 4,
+  "memory_per_worker_gb": 0.5,
+  "scale_factor": 1.0,
+  "calculated_threshold": [700, 10, 10]
+}
+```
+
+**Initial GC state:**
 ```json
 {
   "timestamp": "2025-10-30T10:00:00Z",
