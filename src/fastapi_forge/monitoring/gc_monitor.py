@@ -112,6 +112,10 @@ class GCMonitor:
                 Uses linear scaling: more memory per worker → higher threshold (less frequent GC).
             log_interval: Seconds between periodic GC stats logging
         """
+        # Cache immutable values to avoid repeated syscalls/API calls
+        self._worker_pid = os.getpid()
+        self._threshold_cache: Optional[Tuple[int, int, int]] = None
+
         self.threshold = threshold or self._calculate_threshold()
         self.log_interval = log_interval
         self._monitoring_task: Optional[asyncio.Task] = None
@@ -158,7 +162,7 @@ class GCMonitor:
         logger.info(
             "GC threshold calculated dynamically",
             extra={
-                "worker_pid": os.getpid(),
+                "worker_pid": self._worker_pid,
                 "total_memory_gb": round(total_memory_gb, 2),
                 "workers": workers,
                 "memory_per_worker_gb": round(memory_per_worker_gb, 2),
@@ -182,6 +186,9 @@ class GCMonitor:
         # Configure GC threshold
         self._configure_threshold()
 
+        # Cache the configured threshold (immutable after this point)
+        self._threshold_cache = gc.get_threshold()
+
         # Start periodic monitoring
         self._should_stop = False
         self._monitoring_task = asyncio.create_task(self._monitor_loop())
@@ -189,7 +196,7 @@ class GCMonitor:
         logger.info(
             "GC monitor started",
             extra={
-                "worker_pid": os.getpid(),
+                "worker_pid": self._worker_pid,
                 "threshold": self.threshold,
                 "log_interval": self.log_interval,
             }
@@ -208,7 +215,7 @@ class GCMonitor:
 
         logger.info(
             "GC monitor stopped",
-            extra={"worker_pid": os.getpid()}
+            extra={"worker_pid": self._worker_pid}
         )
 
     def _log_initial_state(self):
@@ -218,8 +225,8 @@ class GCMonitor:
         logger.info(
             "GC initial state",
             extra={
-                "worker_pid": os.getpid(),
-                "threshold": gc.get_threshold(),
+                "worker_pid": self._worker_pid,
+                "threshold": gc.get_threshold(),  # Read once before configuration
                 "gc_enabled": gc.isenabled(),
                 "gen0_collections": stats[0]["collections"],
                 "gen0_collected": stats[0]["collected"],
@@ -241,24 +248,29 @@ class GCMonitor:
         logger.info(
             "GC threshold configured",
             extra={
-                "worker_pid": os.getpid(),
+                "worker_pid": self._worker_pid,
                 "old_threshold": old_threshold,
-                "new_threshold": gc.get_threshold(),
+                "new_threshold": gc.get_threshold(),  # Read once after configuration
             }
         )
 
     async def _monitor_loop(self):
-        """Periodic GC stats logging loop."""
+        """Periodic GC stats logging loop.
+
+        Runs _log_gc_stats in thread pool to avoid blocking the event loop.
+        GC stats collection and JSON serialization can take 50-100ms.
+        """
         while not self._should_stop:
             try:
                 await asyncio.sleep(self.log_interval)
-                self._log_gc_stats()
+                # Run in thread pool to avoid blocking event loop
+                await asyncio.to_thread(self._log_gc_stats)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(
                     f"Error in GC monitor loop: {e}",
-                    extra={"worker_pid": os.getpid()},
+                    extra={"worker_pid": self._worker_pid},
                     exc_info=True
                 )
 
@@ -269,14 +281,16 @@ class GCMonitor:
         - collections: Number of times this generation was collected
         - collected: Number of objects collected
         - uncollectable: Number of objects that couldn't be collected (memory leak indicator)
+
+        Performance: Uses cached worker_pid and threshold to avoid repeated syscalls.
         """
         stats = gc.get_stats()
 
         logger.info(
             "GC stats snapshot",
             extra={
-                "worker_pid": os.getpid(),
-                "threshold": gc.get_threshold(),
+                "worker_pid": self._worker_pid,  # Cached (immutable)
+                "threshold": self._threshold_cache,  # Cached (immutable after start)
                 # Generation 0 (young objects)
                 "gen0_collections": stats[0]["collections"],
                 "gen0_collected": stats[0]["collected"],
