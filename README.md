@@ -13,7 +13,7 @@ FastAPI Forge provides battle-tested patterns and utilities for building product
 - 🔍 **Event Loop Monitoring**: Detect and diagnose blocking operations in async applications
 - 🗑️ **GC Monitoring**: Track Python GC behavior with dynamic threshold calculation based on system resources
 - 🚀 **FastAPI Templates**: Production-ready app templates and best practices
-- 🤖 **Langchain Integration**: Utilities for LLM applications (coming soon)
+- 🤖 **LangChain Integration**: Robust fallback utilities for LLM chains with streaming support
 - 📊 **Observability**: Platform-agnostic logging (ELK, Splunk, Grafana) with optional Datadog APM
 - ⚙️ **Gunicorn/Uvicorn**: Optimized configurations for production deployment
 - 🎯 **Zero Dependencies**: Core logging features require only Python stdlib
@@ -34,6 +34,9 @@ pip install fastapi-forge[gunicorn]
 
 # With Datadog integration
 pip install fastapi-forge[datadog]
+
+# With LangChain integration
+pip install fastapi-forge[langchain]
 
 # Everything
 pip install fastapi-forge[all]
@@ -457,6 +460,105 @@ gen0_collections, gen1_collections, gen2_collections
 - Uneven GC patterns may indicate load imbalance
 - One worker with high uncollectable → investigate that worker's requests
 
+### LangChain Integration
+
+FastAPI Forge provides utilities for building robust LangChain applications with automatic fallback mechanisms.
+
+#### Features
+
+- **Automatic Fallback**: Seamlessly switch to backup chains when primary fails
+- **Streaming Support**: Full support for sync/async streaming operations
+- **Switch Markers**: Optional markers to notify clients of fallback activation
+- **Type Safety**: Fully typed with mypy support
+- **Logging**: Built-in logging for debugging and monitoring
+
+#### Quick Start
+
+```python
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from langchain_core.runnables import RunnableLambda
+from fastapi_forge.langchain import with_runnable_fallback
+
+app = FastAPI()
+
+# Create chains with fallback
+def create_chain():
+    # Primary chain (may fail)
+    primary = RunnableLambda(lambda x: process_with_expensive_llm(x))
+
+    # Fallback chain (more reliable)
+    fallback = RunnableLambda(lambda x: process_with_cheaper_llm(x))
+
+    return with_runnable_fallback(
+        primary,
+        fallback,
+        switch_marker={"type": "fallback_activated"}
+    )
+
+@app.post("/process")
+async def process_endpoint(data: dict):
+    """Process with automatic fallback."""
+    chain = create_chain()
+    result = await chain.ainvoke(data)
+    return {"result": result}
+
+@app.post("/stream")
+async def stream_endpoint(data: dict):
+    """Stream with fallback support."""
+    chain = create_chain()
+
+    async def generate():
+        async for chunk in chain.astream(data):
+            if isinstance(chunk, dict) and chunk.get("type") == "fallback_activated":
+                yield f"data: [FALLBACK]\n\n"
+            else:
+                yield f"data: {chunk}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+#### Common Use Cases
+
+**1. LLM Fallback**: Use cheaper model when primary fails
+```python
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+
+primary = ChatAnthropic(model="claude-3-opus") | output_parser
+fallback = ChatOpenAI(model="gpt-3.5-turbo") | output_parser
+
+chain = with_runnable_fallback(primary, fallback)
+```
+
+**2. API Resilience**: Fall back to cached responses
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=1000)
+def get_cached_response(key: str) -> str:
+    return cached_responses.get(key, "Default response")
+
+primary = RunnableLambda(lambda x: call_external_api(x["query"]))
+fallback = RunnableLambda(lambda x: get_cached_response(x["query"]))
+
+chain = with_runnable_fallback(primary, fallback)
+```
+
+**3. Graceful Degradation**: Reduced functionality when full features fail
+```python
+primary = RunnableLambda(generate_detailed_response)
+fallback = RunnableLambda(lambda x: "Service temporarily degraded. Please try again.")
+
+chain = with_runnable_fallback(primary, fallback)
+```
+
+#### Documentation
+
+For comprehensive documentation, see:
+- **[LangChain Guidelines](./docs/LANGCHAIN_GUIDELINES.md)** - Complete guide with best practices
+- **[Example: LangChain Fallback](./examples/04_langchain_fallback/)** - Working code examples
+
 ## 📁 Project Structure
 
 ```
@@ -470,13 +572,15 @@ fastapi-forge/
 │   │   └── gc_monitor.py     # GC monitoring
 │   ├── utils/                # Utilities
 │   │   └── blocking_detector.py  # Event loop monitoring
+│   ├── langchain/            # LangChain integration
+│   │   └── fallback.py       # Runnable fallback utilities
 │   ├── templates/            # App templates (coming soon)
-│   ├── middleware/           # Production middleware (coming soon)
-│   └── langchain/            # Langchain utilities (coming soon)
+│   └── middleware/           # Production middleware (coming soon)
 ├── examples/
 │   ├── 01_basic_fastapi/
 │   ├── 02_with_ddtrace/
-│   └── 03_with_blocking_monitor/
+│   ├── 03_with_blocking_monitor/
+│   └── 04_langchain_fallback/
 └── docs/
 ```
 
@@ -487,6 +591,7 @@ Check the [`examples/`](./examples/) directory for complete working examples:
 - **[01_basic_fastapi](./examples/01_basic_fastapi/)**: Minimal FastAPI app with logging
 - **[02_with_ddtrace](./examples/02_with_ddtrace/)**: Production setup with Datadog APM
 - **[03_with_blocking_monitor](./examples/03_with_blocking_monitor/)**: Event loop monitoring and blocking detection
+- **[04_langchain_fallback](./examples/04_langchain_fallback/)**: LangChain fallback utilities with streaming support
 
 ## 🤝 Contributing
 
@@ -522,9 +627,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Event loop monitoring and blocking detection
 - [x] **Logging performance optimization (OOM prevention)**
 - [x] **GC monitoring and tuning**
+- [x] **LangChain integration utilities (fallback mechanisms)**
 - [ ] FastAPI app templates
 - [ ] Production middleware (correlation ID, error handling)
-- [ ] Langchain integration utilities
 - [ ] Deployment guides and examples
 
 ---
